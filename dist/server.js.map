@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["../../server.ts"],
+  "sourcesContent": ["// bb-plugin-sidebar-filter \u2014 backend entry.\n//\n// The list itself is pure frontend (the host's sidebar cache); the backend\n// only declares the filter settings rendered in Extensions \u2192 Plugins and\n// editable via `bb plugin config sidebar-filter`.\nimport type { BbPluginApi } from \"@get-bb/plugin-sdk\";\n\nexport default async function plugin(bb: BbPluginApi) {\n  bb.settings.define({\n    hideEmptyProjects: {\n      type: \"boolean\",\n      label: \"Hide projects without active threads\",\n      default: true,\n    },\n    activeMode: {\n      type: \"select\",\n      label: \"A thread counts as active when\",\n      options: [\"exists\", \"running\"],\n      default: \"exists\",\n    },\n  });\n\n  bb.log.info(\"loaded\");\n\n  bb.onDispose(() => {\n    bb.log.info(\"disposed\");\n  });\n}"],
+  "mappings": ";;;;;;;;AAOA,eAAO,OAA8B,IAAiB;AACpD,KAAG,SAAS,OAAO;AAAA,IACjB,mBAAmB;AAAA,MACjB,MAAM;AAAA,MACN,OAAO;AAAA,MACP,SAAS;AAAA,IACX;AAAA,IACA,YAAY;AAAA,MACV,MAAM;AAAA,MACN,OAAO;AAAA,MACP,SAAS,CAAC,UAAU,SAAS;AAAA,MAC7B,SAAS;AAAA,IACX;AAAA,EACF,CAAC;AAED,KAAG,IAAI,KAAK,QAAQ;AAEpB,KAAG,UAAU,MAAM;AACjB,OAAG,IAAI,KAAK,UAAU;AAAA,EACxB,CAAC;AACH;",
+  "names": []
+}
