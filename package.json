@@ -1,6 +1,12 @@
 {
   "name": "bb-plugin-sidebar-filter",
   "version": "0.1.0",
+  "description": "Sidebar thread list that hides projects without active threads.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/slogsdon/bb-plugin-sidebar-filter.git"
+  },
   "type": "module",
   "engines": {
     "bb": ">=0.38",
@@ -34,5 +40,8 @@
     "hono": "^4.11.9",
     "typescript": "^5.7.0",
     "@radix-ui/react-dialog": "^1.1.19"
-  }
+  },
+  "files": [
+    "dist"
+  ]
 }
