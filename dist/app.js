@@ -86,7 +86,7 @@ var {
   jsxs
 } = mod3;
 
-// Code/bb-plugin-sidebar-filter/app.tsx
+// app.tsx
 var COLLAPSED_KEY = "bb-plugin-sidebar-filter.collapsed-projects";
 function activityRunning(thread) {
   const a = thread.activity;
@@ -146,16 +146,6 @@ function FilteredProjectList(props) {
       return next;
     });
   };
-  if (status === "loading") {
-    return /* @__PURE__ */ jsxs("div", { className: "space-y-2 p-2", role: "status", "aria-label": "Loading threads", children: [
-      /* @__PURE__ */ jsx("div", { className: "h-4 w-3/4 rounded-sm bg-sidebar-border/50" }),
-      /* @__PURE__ */ jsx("div", { className: "h-4 w-2/3 rounded-sm bg-sidebar-border/50" }),
-      /* @__PURE__ */ jsx("div", { className: "h-4 w-1/2 rounded-sm bg-sidebar-border/50" })
-    ] });
-  }
-  if (status === "error") {
-    return /* @__PURE__ */ jsx("div", { className: "p-3 text-xs text-muted-foreground", children: "Threads are unavailable right now." });
-  }
   const pinned = useMemo(
     () => threads.filter(
       (t) => t.isPinned && !t.isArchived && matchesQuery(t, props.searchQuery)
@@ -181,6 +171,16 @@ function FilteredProjectList(props) {
     );
     return { projectsWithThreads: visible, byProject: groups };
   }, [projects, threads, activeMode, hideEmpty, props.searchQuery]);
+  if (status === "loading") {
+    return /* @__PURE__ */ jsxs("div", { className: "space-y-2 p-2", role: "status", "aria-label": "Loading threads", children: [
+      /* @__PURE__ */ jsx("div", { className: "h-4 w-3/4 rounded-sm bg-sidebar-border/50" }),
+      /* @__PURE__ */ jsx("div", { className: "h-4 w-2/3 rounded-sm bg-sidebar-border/50" }),
+      /* @__PURE__ */ jsx("div", { className: "h-4 w-1/2 rounded-sm bg-sidebar-border/50" })
+    ] });
+  }
+  if (status === "error") {
+    return /* @__PURE__ */ jsx("div", { className: "p-3 text-xs text-muted-foreground", children: "Threads are unavailable right now." });
+  }
   return /* @__PURE__ */ jsxs(RowMenuProvider, { children: [
     pinned.length > 0 ? /* @__PURE__ */ jsxs("section", { className: "space-y-0.5 py-1", "aria-label": "Pinned threads", children: [
       /* @__PURE__ */ jsx("div", { className: "px-2 pb-0.5 pt-1 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground/70", children: "Pinned" }),
@@ -309,52 +309,71 @@ function ThreadRow({
     actions.open(thread.id);
     onNavigate();
   };
-  return /* @__PURE__ */ jsx(
+  return /* @__PURE__ */ jsxs(
     "div",
     {
       className: `group/row relative rounded-md ${isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`,
       onContextMenu: (event) => {
         event.preventDefault();
-        openMenu.open(thread.id, event.clientX, event.clientY);
+        openMenu.open(thread.id, event.clientX, event.clientY, null);
       },
-      children: /* @__PURE__ */ jsxs(
-        "a",
-        {
-          "data-sidebar-thread-shortcut-target": "",
-          "data-sidebar-thread-id": thread.id,
-          href: "#",
-          onClick: handleOpen,
-          onAuxClick: (event) => {
-            if (event.button === 1) {
-              event.preventDefault();
-              actions.open(thread.id, { split: true });
-              onNavigate();
-            }
-          },
-          title: `${title} \u2014 ${statusDotAria(thread)}`,
-          className: `flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-sm ${thread.isUnread && !isActive ? "font-medium text-foreground" : "text-muted-foreground"}`,
-          children: [
-            /* @__PURE__ */ jsx(
-              "span",
-              {
-                "aria-hidden": "true",
-                className: `size-1.5 shrink-0 rounded-full ${statusDotClass(thread)}`
+      children: [
+        /* @__PURE__ */ jsxs(
+          "a",
+          {
+            "data-sidebar-thread-shortcut-target": "",
+            "data-sidebar-thread-id": thread.id,
+            href: "#",
+            onClick: handleOpen,
+            onAuxClick: (event) => {
+              if (event.button === 1) {
+                event.preventDefault();
+                actions.open(thread.id, { split: true });
+                onNavigate();
               }
-            ),
-            /* @__PURE__ */ jsx("span", { className: "min-w-0 flex-1 truncate", children: title }),
-            isAvailable && !isCompactViewport ? /* @__PURE__ */ jsx(
-              "span",
-              {
-                ...splitProps,
-                "aria-hidden": "true",
-                className: "shrink-0 text-[10px] text-subtle-foreground/50 opacity-0 transition-opacity group-hover/row:opacity-100",
-                children: "\u2922"
-              }
-            ) : null,
-            secondary && !isCompactViewport ? /* @__PURE__ */ jsx("span", { className: "shrink-0 max-w-28 truncate text-[11px] text-subtle-foreground/60", children: secondary }) : null
-          ]
-        }
-      )
+            },
+            title: `${title} \u2014 ${statusDotAria(thread)}`,
+            className: `flex min-w-0 items-center gap-2 rounded-md py-1 pl-2 pr-8 text-sm ${thread.isUnread && !isActive ? "font-medium text-foreground" : "text-muted-foreground"}`,
+            children: [
+              /* @__PURE__ */ jsx(
+                "span",
+                {
+                  "aria-hidden": "true",
+                  className: `size-1.5 shrink-0 rounded-full ${statusDotClass(thread)}`
+                }
+              ),
+              /* @__PURE__ */ jsx("span", { className: "min-w-0 flex-1 truncate", children: title }),
+              isAvailable && !isCompactViewport ? /* @__PURE__ */ jsx(
+                "span",
+                {
+                  ...splitProps,
+                  "aria-hidden": "true",
+                  className: "shrink-0 text-[10px] text-subtle-foreground/50 opacity-0 transition-opacity group-hover/row:opacity-100",
+                  children: "\u2922"
+                }
+              ) : null,
+              secondary && !isCompactViewport ? /* @__PURE__ */ jsx("span", { className: "shrink-0 max-w-28 truncate text-[11px] text-subtle-foreground/60", children: secondary }) : null
+            ]
+          }
+        ),
+        /* @__PURE__ */ jsx(
+          "button",
+          {
+            type: "button",
+            "aria-label": `Actions for ${title}`,
+            "aria-haspopup": "menu",
+            "aria-expanded": openMenu.activeThreadId === thread.id,
+            title: "Thread actions",
+            onClick: (event) => {
+              event.stopPropagation();
+              const rect = event.currentTarget.getBoundingClientRect();
+              openMenu.open(thread.id, rect.right, rect.bottom, event.currentTarget);
+            },
+            className: `absolute right-1 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded text-base leading-none text-subtle-foreground transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 ${isCompactViewport || isActive ? "opacity-100" : "opacity-0 group-hover/row:opacity-100"}`,
+            children: /* @__PURE__ */ jsx("span", { "aria-hidden": "true", children: "\u22EF" })
+          }
+        )
+      ]
     }
   );
 }
@@ -365,7 +384,10 @@ function RowMenuProvider({ children }) {
     if (!menu) return;
     const close = () => setMenu(null);
     const onKey = (event) => {
-      if (event.key === "Escape") close();
+      if (event.key === "Escape") {
+        menu.returnFocus?.focus();
+        close();
+      }
     };
     window.addEventListener("click", close);
     window.addEventListener("contextmenu", close);
@@ -376,11 +398,17 @@ function RowMenuProvider({ children }) {
       window.removeEventListener("keydown", onKey);
     };
   }, [menu]);
-  const open = (threadId, x, y) => setMenu({ threadId, x, y });
-  return /* @__PURE__ */ jsxs(RowMenuContext.Provider, { value: { open }, children: [
-    children,
-    menu ? /* @__PURE__ */ jsx(RowMenu, { menu, onClose: () => setMenu(null) }) : null
-  ] });
+  const open = (threadId, x, y, returnFocus) => setMenu({ threadId, x, y, returnFocus });
+  return /* @__PURE__ */ jsxs(
+    RowMenuContext.Provider,
+    {
+      value: { activeThreadId: menu?.threadId ?? null, open },
+      children: [
+        children,
+        menu ? /* @__PURE__ */ jsx(RowMenu, { menu, onClose: () => setMenu(null) }) : null
+      ]
+    }
+  );
 }
 function useRowMenu() {
   const ctx = useContext(RowMenuContext);
@@ -394,23 +422,45 @@ function RowMenu({
   const actions = experimental_useSidebarThreadActions();
   const { threads: allThreads } = experimental_useSidebarThreads();
   const thread = allThreads.find((t) => t.id === menu.threadId);
+  const firstItemRef = useRef(null);
+  useEffect(() => {
+    firstItemRef.current?.focus();
+  }, [menu.threadId]);
   if (!thread) return null;
-  const itemClass = "w-full rounded px-2 py-1 text-left text-sm text-foreground hover:bg-accent";
+  const itemClass = "w-full rounded px-2 py-1.5 text-left text-sm text-foreground hover:bg-accent focus:bg-accent focus:outline-none";
   const style = {
-    left: Math.min(menu.x, window.innerWidth - 180),
-    top: Math.min(menu.y, window.innerHeight - 160)
+    left: Math.max(4, Math.min(menu.x, window.innerWidth - 196)),
+    top: Math.max(4, Math.min(menu.y, window.innerHeight - 260))
+  };
+  const handleMenuKeyDown = (event) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const items = Array.from(
+      event.currentTarget.querySelectorAll(
+        '[role="menuitem"]'
+      )
+    );
+    const current = items.indexOf(document.activeElement);
+    if (event.key === "Home") items[0]?.focus();
+    else if (event.key === "End") items.at(-1)?.focus();
+    else if (event.key === "ArrowDown")
+      items[(current + 1 + items.length) % items.length]?.focus();
+    else items[(current - 1 + items.length) % items.length]?.focus();
   };
   return /* @__PURE__ */ jsxs(
     "div",
     {
       role: "menu",
+      "aria-label": `Actions for ${threadTitle(thread)}`,
       className: "fixed z-50 min-w-40 rounded-md border border-border bg-popover p-1 shadow-lg",
       style,
       onClick: (event) => event.stopPropagation(),
+      onKeyDown: handleMenuKeyDown,
       children: [
         /* @__PURE__ */ jsx(
           "button",
           {
+            ref: firstItemRef,
             type: "button",
             role: "menuitem",
             className: itemClass,
@@ -434,6 +484,35 @@ function RowMenu({
             children: thread.isUnread ? "Mark as read" : "Mark as unread"
           }
         ),
+        /* @__PURE__ */ jsx("div", { className: "my-1 h-px bg-border", role: "separator" }),
+        /* @__PURE__ */ jsx(
+          "button",
+          {
+            type: "button",
+            role: "menuitem",
+            className: itemClass,
+            onClick: () => {
+              const nextTitle = window.prompt("Rename thread", threadTitle(thread));
+              if (nextTitle?.trim()) void actions.rename(thread.id, nextTitle.trim());
+              onClose();
+            },
+            children: "Rename\u2026"
+          }
+        ),
+        /* @__PURE__ */ jsx(
+          "button",
+          {
+            type: "button",
+            role: "menuitem",
+            className: itemClass,
+            onClick: () => {
+              void navigator.clipboard?.writeText(thread.id).catch(() => void 0);
+              onClose();
+            },
+            children: "Copy thread ID"
+          }
+        ),
+        /* @__PURE__ */ jsx("div", { className: "my-1 h-px bg-border", role: "separator" }),
         /* @__PURE__ */ jsx(
           "button",
           {

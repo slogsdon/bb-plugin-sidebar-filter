@@ -57,8 +57,9 @@ bb plugin config sidebar-filter set activeMode exists   # or running
 - Middle-click opens a thread in a split; hover shows the split-drag
   affordance.
 - The host search field filters rows (and projects) live.
-- Right-click a thread row for a menu: pin/unpin, mark read/unread, archive,
-  delete (through bb's own confirmation flow).
+- Click a thread row's three-dot button or right-click the row for a menu:
+  pin/unpin, mark read/unread, rename, copy thread ID, archive, and delete
+  (through bb's own confirmation flow).
 
 ## What it deliberately leaves out
 

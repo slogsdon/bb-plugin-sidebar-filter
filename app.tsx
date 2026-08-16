@@ -16,6 +16,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -89,6 +90,7 @@ interface RowMenuState {
   threadId: string;
   x: number;
   y: number;
+  returnFocus: HTMLButtonElement | null;
 }
 
 function FilteredProjectList(props: PluginThreadListProps) {
@@ -120,23 +122,6 @@ function FilteredProjectList(props: PluginThreadListProps) {
       return next;
     });
   };
-
-  if (status === "loading") {
-    return (
-      <div className="space-y-2 p-2" role="status" aria-label="Loading threads">
-        <div className="h-4 w-3/4 rounded-sm bg-sidebar-border/50" />
-        <div className="h-4 w-2/3 rounded-sm bg-sidebar-border/50" />
-        <div className="h-4 w-1/2 rounded-sm bg-sidebar-border/50" />
-      </div>
-    );
-  }
-  if (status === "error") {
-    return (
-      <div className="p-3 text-xs text-muted-foreground">
-        Threads are unavailable right now.
-      </div>
-    );
-  }
 
   // Pinned threads live in their own section on top, like the built-in list;
   // everyone else is grouped under their project.
@@ -170,6 +155,23 @@ function FilteredProjectList(props: PluginThreadListProps) {
     );
     return { projectsWithThreads: visible, byProject: groups };
   }, [projects, threads, activeMode, hideEmpty, props.searchQuery]);
+
+  if (status === "loading") {
+    return (
+      <div className="space-y-2 p-2" role="status" aria-label="Loading threads">
+        <div className="h-4 w-3/4 rounded-sm bg-sidebar-border/50" />
+        <div className="h-4 w-2/3 rounded-sm bg-sidebar-border/50" />
+        <div className="h-4 w-1/2 rounded-sm bg-sidebar-border/50" />
+      </div>
+    );
+  }
+  if (status === "error") {
+    return (
+      <div className="p-3 text-xs text-muted-foreground">
+        Threads are unavailable right now.
+      </div>
+    );
+  }
 
   return (
     <RowMenuProvider>
@@ -346,7 +348,7 @@ function ThreadRow({
       }`}
       onContextMenu={(event) => {
         event.preventDefault();
-        openMenu.open(thread.id, event.clientX, event.clientY);
+        openMenu.open(thread.id, event.clientX, event.clientY, null);
       }}
     >
       <a
@@ -362,7 +364,7 @@ function ThreadRow({
           }
         }}
         title={`${title} — ${statusDotAria(thread)}`}
-        className={`flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-sm ${
+        className={`flex min-w-0 items-center gap-2 rounded-md py-1 pl-2 pr-8 text-sm ${
           thread.isUnread && !isActive
             ? "font-medium text-foreground"
             : "text-muted-foreground"
@@ -388,14 +390,39 @@ function ThreadRow({
           </span>
         ) : null}
       </a>
+      <button
+        type="button"
+        aria-label={`Actions for ${title}`}
+        aria-haspopup="menu"
+        aria-expanded={openMenu.activeThreadId === thread.id}
+        title="Thread actions"
+        onClick={(event) => {
+          event.stopPropagation();
+          const rect = event.currentTarget.getBoundingClientRect();
+          openMenu.open(thread.id, rect.right, rect.bottom, event.currentTarget);
+        }}
+        className={`absolute right-1 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded text-base leading-none text-subtle-foreground transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 ${
+          isCompactViewport || isActive
+            ? "opacity-100"
+            : "opacity-0 group-hover/row:opacity-100"
+        }`}
+      >
+        <span aria-hidden="true">⋯</span>
+      </button>
     </div>
   );
 }
 
-/* Right-click row menu ---------------------------------------------------- */
+/* Thread row menu -------------------------------------------------------- */
 
 const RowMenuContext = createContext<{
-  open: (threadId: string, x: number, y: number) => void;
+  activeThreadId: string | null;
+  open: (
+    threadId: string,
+    x: number,
+    y: number,
+    returnFocus: HTMLButtonElement | null,
+  ) => void;
 } | null>(null);
 
 function RowMenuProvider({ children }: { children: ReactNode }) {
@@ -405,7 +432,10 @@ function RowMenuProvider({ children }: { children: ReactNode }) {
     if (!menu) return;
     const close = () => setMenu(null);
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
+      if (event.key === "Escape") {
+        menu.returnFocus?.focus();
+        close();
+      }
     };
     window.addEventListener("click", close);
     window.addEventListener("contextmenu", close);
@@ -417,11 +447,17 @@ function RowMenuProvider({ children }: { children: ReactNode }) {
     };
   }, [menu]);
 
-  const open = (threadId: string, x: number, y: number) =>
-    setMenu({ threadId, x, y });
+  const open = (
+    threadId: string,
+    x: number,
+    y: number,
+    returnFocus: HTMLButtonElement | null,
+  ) => setMenu({ threadId, x, y, returnFocus });
 
   return (
-    <RowMenuContext.Provider value={{ open }}>
+    <RowMenuContext.Provider
+      value={{ activeThreadId: menu?.threadId ?? null, open }}
+    >
       {children}
       {menu ? <RowMenu menu={menu} onClose={() => setMenu(null)} /> : null}
     </RowMenuContext.Provider>
@@ -444,24 +480,48 @@ function RowMenu({
   const actions = experimental_useSidebarThreadActions();
   const { threads: allThreads } = experimental_useSidebarThreads();
   const thread = allThreads.find((t) => t.id === menu.threadId);
+  const firstItemRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    firstItemRef.current?.focus();
+  }, [menu.threadId]);
 
   if (!thread) return null;
 
   const itemClass =
-    "w-full rounded px-2 py-1 text-left text-sm text-foreground hover:bg-accent";
+    "w-full rounded px-2 py-1.5 text-left text-sm text-foreground hover:bg-accent focus:bg-accent focus:outline-none";
   const style = {
-    left: Math.min(menu.x, window.innerWidth - 180),
-    top: Math.min(menu.y, window.innerHeight - 160),
+    left: Math.max(4, Math.min(menu.x, window.innerWidth - 196)),
+    top: Math.max(4, Math.min(menu.y, window.innerHeight - 260)),
+  };
+
+  const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const items = Array.from(
+      event.currentTarget.querySelectorAll<HTMLButtonElement>(
+        '[role="menuitem"]',
+      ),
+    );
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (event.key === "Home") items[0]?.focus();
+    else if (event.key === "End") items.at(-1)?.focus();
+    else if (event.key === "ArrowDown")
+      items[(current + 1 + items.length) % items.length]?.focus();
+    else items[(current - 1 + items.length) % items.length]?.focus();
   };
 
   return (
     <div
       role="menu"
+      aria-label={`Actions for ${threadTitle(thread)}`}
       className="fixed z-50 min-w-40 rounded-md border border-border bg-popover p-1 shadow-lg"
       style={style}
       onClick={(event) => event.stopPropagation()}
+      onKeyDown={handleMenuKeyDown}
     >
       <button
+        ref={firstItemRef}
         type="button"
         role="menuitem"
         className={itemClass}
@@ -483,6 +543,31 @@ function RowMenu({
       >
         {thread.isUnread ? "Mark as read" : "Mark as unread"}
       </button>
+      <div className="my-1 h-px bg-border" role="separator" />
+      <button
+        type="button"
+        role="menuitem"
+        className={itemClass}
+        onClick={() => {
+          const nextTitle = window.prompt("Rename thread", threadTitle(thread));
+          if (nextTitle?.trim()) void actions.rename(thread.id, nextTitle.trim());
+          onClose();
+        }}
+      >
+        Rename…
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className={itemClass}
+        onClick={() => {
+          void navigator.clipboard?.writeText(thread.id).catch(() => undefined);
+          onClose();
+        }}
+      >
+        Copy thread ID
+      </button>
+      <div className="my-1 h-px bg-border" role="separator" />
       <button
         type="button"
         role="menuitem"

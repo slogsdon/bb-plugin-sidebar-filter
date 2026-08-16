@@ -23,6 +23,7 @@
   "include": [
     "server.ts",
     "app.tsx",
+    "app.test.tsx",
     "components",
     "lib",
     "hooks"
