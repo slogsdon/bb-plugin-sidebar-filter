@@ -8,6 +8,12 @@ organization mode) shows **every** project as a collapsible row — including
 projects whose threads are all archived. This list drops those rows entirely,
 so the sidebar only shows projects that actually have something in them.
 
+## Screenshots
+
+![sidebar-filter](docs/screenshot.png)
+
+*The sidebar with sidebar-filter enabled: project groups, collapsed where idle.*
+
 ## Install
 
 ```sh
