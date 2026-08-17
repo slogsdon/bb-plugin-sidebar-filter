@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-sidebar-filter",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Sidebar thread list that hides projects without active threads.",
   "license": "MIT",
   "repository": {
@@ -10,7 +10,8 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "bb plugin build ."
   },
   "engines": {
     "bb": ">=0.38",
@@ -51,6 +52,8 @@
     "@radix-ui/react-dialog": "^1.1.19"
   },
   "files": [
-    "dist"
+    "dist",
+    "server.ts",
+    "app.tsx"
   ]
 }
