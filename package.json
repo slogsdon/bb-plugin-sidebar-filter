@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-sidebar-filter",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Sidebar thread list that hides projects without active threads.",
   "license": "MIT",
   "repository": {
@@ -21,7 +21,7 @@
     "name": "Sidebar Project Filter",
     "description": "Sidebar thread list that hides projects without active threads.",
     "branding": {
-      "icon": "Filter"
+      "icon": "./assets/icon.svg"
     },
     "server": "./server.ts",
     "app": "./app.tsx"
@@ -54,6 +54,7 @@
   "files": [
     "dist",
     "server.ts",
-    "app.tsx"
+    "app.tsx",
+    "assets/icon.svg"
   ]
 }
