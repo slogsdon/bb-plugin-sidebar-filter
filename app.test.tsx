@@ -62,6 +62,7 @@ const slotProps: PluginThreadListProps = {
   isCompactViewport: false,
   onNavigate: vi.fn(),
   searchQuery: "",
+  experimental_Original: () => null,
 };
 
 let threadList: Awaited<ReturnType<typeof loadPluginApp>>["threadLists"][number];
@@ -155,5 +156,133 @@ describe("sidebar thread actions", () => {
       { method: "archive", threadId: thread.id },
       { method: "requestDelete", threadId: thread.id },
     ]);
+  });
+});
+
+describe("project menu and nesting", () => {
+  const childThread: PluginSidebarThread = {
+    ...thread,
+    id: "thread-child",
+    title: "Child thread",
+    parentThreadId: thread.id,
+  };
+
+  function renderWith(threads: PluginSidebarThread[]) {
+    return renderSlot(threadList, slotProps, {
+      settings: { hideEmptyProjects: true, activeMode: "exists" },
+      sidebarThreads: { status: "ready", projects: [project], threads },
+      rpc: {
+        renameProject: async () => ({ ok: true }),
+        deleteProject: async () => ({ ok: true }),
+        archiveAllThreads: async () => ({ ok: true }),
+      },
+    });
+  }
+
+  test("opens a project-level menu with built-in-style actions", () => {
+    const slot = renderWith([thread]);
+
+    fireEvent.click(
+      slot.getByRole("button", { name: "Project actions for Sidebar Filter" }),
+    );
+
+    expect(slot.getByRole("menu")).toBeTruthy();
+    expect(slot.getByRole("menuitem", { name: "New thread" })).toBeTruthy();
+    expect(slot.getByRole("menuitem", { name: "Rename…" })).toBeTruthy();
+    expect(
+      slot.getByRole("menuitem", { name: "Archive all threads" }),
+    ).toBeTruthy();
+    expect(
+      slot.getByRole("menuitem", { name: "Delete project…" }),
+    ).toBeTruthy();
+  });
+
+  test("New thread routes through the host sidebar action", () => {
+    const slot = renderWith([thread]);
+
+    fireEvent.click(
+      slot.getByRole("button", { name: "Project actions for Sidebar Filter" }),
+    );
+    fireEvent.click(slot.getByRole("menuitem", { name: "New thread" }));
+
+    expect(slot.inspection.sidebarActionCalls).toContainEqual({
+      method: "openNewThread",
+      options: { projectId: project.id },
+    });
+  });
+
+  test("Archive all threads calls the project rpc", async () => {
+    const slot = renderWith([thread]);
+
+    fireEvent.click(
+      slot.getByRole("button", { name: "Project actions for Sidebar Filter" }),
+    );
+    fireEvent.click(
+      slot.getByRole("menuitem", { name: "Archive all threads" }),
+    );
+
+    await waitFor(() =>
+      expect(slot.inspection.rpcCalls).toContainEqual({
+        method: "archiveAllThreads",
+        input: { projectId: project.id },
+      }),
+    );
+  });
+
+  test("Rename drives the project rpc with the prompted name", async () => {
+    vi.spyOn(window, "prompt").mockReturnValue("Renamed project");
+    const slot = renderWith([thread]);
+
+    fireEvent.click(
+      slot.getByRole("button", { name: "Project actions for Sidebar Filter" }),
+    );
+    fireEvent.click(slot.getByRole("menuitem", { name: "Rename…" }));
+
+    await waitFor(() =>
+      expect(slot.inspection.rpcCalls).toContainEqual({
+        method: "renameProject",
+        input: { projectId: project.id, name: "Renamed project" },
+      }),
+    );
+  });
+
+  test("nests a child thread under its parent", () => {
+    const slot = renderWith([thread, childThread]);
+
+    const parentLink = slot.getByRole("link", { name: "Fix sidebar actions" });
+    const childLink = slot.getByRole("link", { name: "Child thread" });
+
+    expect(parentLink).toBeTruthy();
+    expect(childLink).toBeTruthy();
+    // Child is indented one level deeper than the parent.
+    expect(childLink.style.paddingLeft).not.toEqual(
+      parentLink.style.paddingLeft,
+    );
+    expect(parseFloat(childLink.style.paddingLeft)).toBeGreaterThan(
+      parseFloat(parentLink.style.paddingLeft),
+    );
+  });
+
+  test("keeps an inactive parent visible when a child matches", () => {
+    const inactiveParent: PluginSidebarThread = {
+      ...thread,
+      id: "thread-parent",
+      title: "Idle parent",
+      isArchived: true,
+    };
+    const activeChild: PluginSidebarThread = {
+      ...thread,
+      id: "thread-child",
+      title: "Running child",
+      parentThreadId: "thread-parent",
+      isArchived: false,
+      indicator: "runtime",
+    };
+
+    const slot = renderWith([inactiveParent, activeChild]);
+
+    // Both render because the active child pulls its parent into view.
+    expect(slot.getByRole("link", { name: "Idle parent" })).toBeTruthy();
+    expect(slot.getByRole("link", { name: "Running child" })).toBeTruthy();
   });
 });

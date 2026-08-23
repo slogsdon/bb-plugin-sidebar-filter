@@ -11,6 +11,11 @@
 // project (like the built-in "project" organization mode), but drops projects
 // that have no matching threads — "active" means non-archived by default, or
 // currently running, per the backend `activeMode` setting.
+//
+// Within a project, threads render as a tree: a parent thread shows its child
+// threads nested beneath it (matching the built-in thread organization), and
+// each project row carries the built-in-style ⋯ menu on hover with project
+// actions (new thread, rename, archive all, delete).
 import {
   createContext,
   useContext,
@@ -26,8 +31,10 @@ import {
   experimental_useSidebarThreadActions,
   experimental_useSidebarThreadSplit,
   experimental_useSidebarThreads,
+  useRpc,
   useSettings,
 } from "@get-bb/plugin-sdk/app";
+import type { rpcContract } from "./server";
 import type {
   PluginSidebarProject,
   PluginSidebarThread,
@@ -86,16 +93,29 @@ function threadTitle(thread: PluginSidebarThread): string {
   return thread.title ?? thread.titleFallback ?? "Untitled";
 }
 
-interface RowMenuState {
-  threadId: string;
-  x: number;
-  y: number;
-  returnFocus: HTMLButtonElement | null;
+interface ThreadForest {
+  roots: PluginSidebarThread[];
+  childrenOf: ReadonlyMap<string, PluginSidebarThread[]>;
 }
+
+type MenuState =
+  | {
+      kind: "thread";
+      threadId: string;
+      x: number;
+      y: number;
+      returnFocus: HTMLButtonElement | null;
+    }
+  | {
+      kind: "project";
+      projectId: string;
+      x: number;
+      y: number;
+      returnFocus: HTMLButtonElement | null;
+    };
 
 function FilteredProjectList(props: PluginThreadListProps) {
   const { status, threads, projects } = experimental_useSidebarThreads();
-  const actions = experimental_useSidebarThreadActions();
   const { values } = useSettings();
   const hideEmpty = (values?.hideEmptyProjects ?? true) !== false;
   const activeMode: "exists" | "running" =
@@ -124,7 +144,7 @@ function FilteredProjectList(props: PluginThreadListProps) {
   };
 
   // Pinned threads live in their own section on top, like the built-in list;
-  // everyone else is grouped under their project.
+  // everyone else is grouped under their project as a thread tree.
   const pinned = useMemo(
     () =>
       threads
@@ -136,24 +156,69 @@ function FilteredProjectList(props: PluginThreadListProps) {
     [threads, props.searchQuery],
   );
 
-  const { projectsWithThreads, byProject } = useMemo(() => {
-    const groups = new Map<string, PluginSidebarThread[]>();
-    for (const project of projects) groups.set(project.id, []);
-    for (const thread of threads) {
-      if (thread.isPinned) continue;
-      if (!isActiveThread(thread, activeMode)) continue;
-      if (!matchesQuery(thread, props.searchQuery)) continue;
-      const list = groups.get(thread.projectId);
-      if (list === undefined) continue; // thread for an unknown project
-      list.push(thread);
-    }
-    for (const list of groups.values()) {
-      list.sort((a, b) => b.updatedAt - a.updatedAt);
-    }
-    const visible = projects.filter(
-      (p) => !hideEmpty || (groups.get(p.id)?.length ?? 0) > 0,
+  const { visibleProjects, forests } = useMemo(() => {
+    const byId = new Map(threads.map((t) => [t.id, t]));
+
+    // Threads that match the active + search filters.
+    const matched = threads.filter(
+      (t) =>
+        !t.isPinned &&
+        isActiveThread(t, activeMode) &&
+        matchesQuery(t, props.searchQuery),
     );
-    return { projectsWithThreads: visible, byProject: groups };
+
+    // Keep a thread if it matches, OR it is an ancestor of a matching thread,
+    // so the parent chain stays visible under the child it belongs to.
+    const showSet = new Set<string>();
+    const addWithAncestors = (thread: PluginSidebarThread) => {
+      let current: PluginSidebarThread | undefined = thread;
+      while (current && !showSet.has(current.id)) {
+        showSet.add(current.id);
+        current = current.parentThreadId
+          ? byId.get(current.parentThreadId)
+          : undefined;
+      }
+    };
+    for (const thread of matched) addWithAncestors(thread);
+
+    const byProject = new Map<string, PluginSidebarThread[]>();
+    for (const project of projects) byProject.set(project.id, []);
+    for (const thread of threads) {
+      if (!showSet.has(thread.id)) continue;
+      byProject.get(thread.projectId)?.push(thread);
+    }
+
+    const sortByUpdated = (a: PluginSidebarThread, b: PluginSidebarThread) =>
+      b.updatedAt - a.updatedAt;
+
+    const builtForests = new Map<string, ThreadForest>();
+    for (const project of projects) {
+      const projectThreads = byProject.get(project.id) ?? [];
+      const childrenOf = new Map<string, PluginSidebarThread[]>();
+      const roots: PluginSidebarThread[] = [];
+      for (const thread of projectThreads) {
+        if (
+          thread.parentThreadId &&
+          showSet.has(thread.parentThreadId) &&
+          byId.has(thread.parentThreadId)
+        ) {
+          const siblings = childrenOf.get(thread.parentThreadId) ?? [];
+          siblings.push(thread);
+          childrenOf.set(thread.parentThreadId, siblings);
+        } else {
+          roots.push(thread);
+        }
+      }
+      roots.sort(sortByUpdated);
+      for (const siblings of childrenOf.values()) siblings.sort(sortByUpdated);
+      builtForests.set(project.id, { roots, childrenOf });
+    }
+
+    const visible = projects.filter(
+      (p) => !hideEmpty || (builtForests.get(p.id)?.roots.length ?? 0) > 0,
+    );
+
+    return { visibleProjects: visible, forests: builtForests };
   }, [projects, threads, activeMode, hideEmpty, props.searchQuery]);
 
   if (status === "loading") {
@@ -174,7 +239,7 @@ function FilteredProjectList(props: PluginThreadListProps) {
   }
 
   return (
-    <RowMenuProvider>
+    <MenuProvider>
       {pinned.length > 0 ? (
         <section className="space-y-0.5 py-1" aria-label="Pinned threads">
           <div className="px-2 pb-0.5 pt-1 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground/70">
@@ -184,6 +249,8 @@ function FilteredProjectList(props: PluginThreadListProps) {
             <ThreadRow
               key={thread.id}
               thread={thread}
+              depth={0}
+              childrenOf={null}
               activeThreadId={props.activeThreadId}
               isCompactViewport={props.isCompactViewport}
               onNavigate={props.onNavigate}
@@ -193,33 +260,37 @@ function FilteredProjectList(props: PluginThreadListProps) {
       ) : null}
 
       <section className="space-y-0.5 py-1" aria-label="Projects">
-        {projectsWithThreads.length === 0 ? (
+        {visibleProjects.length === 0 ? (
           <div className="px-2 py-3 text-xs text-subtle-foreground/60">
             No projects with active threads.
           </div>
         ) : (
-          projectsWithThreads.map((project) => (
-            <ProjectGroup
-              key={project.id}
-              project={project}
-              threads={byProject.get(project.id) ?? []}
-              isCollapsed={collapsed.has(project.id)}
-              onToggleCollapsed={() => toggleCollapsed(project.id)}
-              activeThreadId={props.activeThreadId}
-              activeProjectId={props.activeProjectId}
-              isCompactViewport={props.isCompactViewport}
-              onNavigate={props.onNavigate}
-            />
-          ))
+          visibleProjects.map((project) => {
+            const forest = forests.get(project.id);
+            if (!forest || forest.roots.length === 0) return null;
+            return (
+              <ProjectGroup
+                key={project.id}
+                project={project}
+                forest={forest}
+                isCollapsed={collapsed.has(project.id)}
+                onToggleCollapsed={() => toggleCollapsed(project.id)}
+                activeThreadId={props.activeThreadId}
+                activeProjectId={props.activeProjectId}
+                isCompactViewport={props.isCompactViewport}
+                onNavigate={props.onNavigate}
+              />
+            );
+          })
         )}
       </section>
-    </RowMenuProvider>
+    </MenuProvider>
   );
 }
 
 function ProjectGroup({
   project,
-  threads,
+  forest,
   isCollapsed,
   onToggleCollapsed,
   activeThreadId,
@@ -228,17 +299,20 @@ function ProjectGroup({
   onNavigate,
 }: {
   project: PluginSidebarProject;
-  threads: PluginSidebarThread[];
+  forest: ThreadForest;
   isCollapsed: boolean;
   onToggleCollapsed: () => void;
 } & Pick<
   PluginThreadListProps,
   "activeThreadId" | "activeProjectId" | "isCompactViewport" | "onNavigate"
 >) {
-  const actions = experimental_useSidebarThreadActions();
   const isActiveProject = project.id === activeProjectId;
+  const menu = useMenu();
+  const totalCount =
+    forest.roots.length +
+    [...forest.childrenOf.values()].reduce((n, siblings) => n + siblings.length, 0);
   const handleNewThread = () =>
-    actions.openNewThread({ projectId: project.id });
+    experimental_useSidebarThreadActions().openNewThread({ projectId: project.id });
 
   return (
     <div className="group/project">
@@ -272,41 +346,49 @@ function ProjectGroup({
           title={project.name}
         >
           {project.name}
-          {threads.length > 0 ? (
+          {totalCount > 0 ? (
             <span className="ml-1.5 text-xs font-normal text-subtle-foreground/70">
-              {threads.length}
+              {totalCount}
             </span>
           ) : null}
         </button>
-        {!isCompactViewport ? (
-          <button
-            type="button"
-            onClick={handleNewThread}
-            aria-label={`New thread in ${project.name}`}
-            title="New thread in this project"
-            className="rounded p-0.5 text-subtle-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/project:opacity-100"
-          >
-            +<span className="sr-only">New thread</span>
-          </button>
-        ) : null}
+        <button
+          type="button"
+          aria-label={`Project actions for ${project.name}`}
+          aria-haspopup="menu"
+          title="Project actions"
+          onClick={(event) => {
+            event.stopPropagation();
+            const rect = event.currentTarget.getBoundingClientRect();
+            menu.openProject(
+              project.id,
+              rect.right,
+              rect.bottom,
+              event.currentTarget,
+            );
+          }}
+          className={`rounded p-0.5 text-subtle-foreground transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 ${
+            isCompactViewport || isActiveProject
+              ? "opacity-100"
+              : "opacity-0 group-hover/project:opacity-100"
+          }`}
+        >
+          <span aria-hidden="true">⋯</span>
+        </button>
       </div>
       {!isCollapsed ? (
         <div className="mt-px space-y-px">
-          {threads.length === 0 ? (
-            <div className="px-2 py-1 text-xs text-subtle-foreground/50">
-              No matching threads
-            </div>
-          ) : (
-            threads.map((thread) => (
-              <ThreadRow
-                key={thread.id}
-                thread={thread}
-                activeThreadId={activeThreadId}
-                isCompactViewport={isCompactViewport}
-                onNavigate={onNavigate}
-              />
-            ))
-          )}
+          {forest.roots.map((thread) => (
+            <ThreadRow
+              key={thread.id}
+              thread={thread}
+              depth={0}
+              childrenOf={forest.childrenOf}
+              activeThreadId={activeThreadId}
+              isCompactViewport={isCompactViewport}
+              onNavigate={onNavigate}
+            />
+          ))}
         </div>
       ) : null}
     </div>
@@ -315,11 +397,15 @@ function ProjectGroup({
 
 function ThreadRow({
   thread,
+  depth,
+  childrenOf,
   activeThreadId,
   isCompactViewport,
   onNavigate,
 }: {
   thread: PluginSidebarThread;
+  depth: number;
+  childrenOf: ReadonlyMap<string, PluginSidebarThread[]> | null;
   activeThreadId: string | null;
   isCompactViewport: boolean;
   onNavigate: () => void;
@@ -328,12 +414,13 @@ function ThreadRow({
   const { splitProps, isAvailable } = experimental_useSidebarThreadSplit(
     thread.id,
   );
-  const openMenu = useRowMenu();
+  const menu = useMenu();
 
   const isActive = thread.id === activeThreadId;
   const title = threadTitle(thread);
   const secondary =
     thread.environment?.branchName ?? thread.host?.name ?? null;
+  const children = childrenOf?.get(thread.id) ?? [];
 
   const handleOpen = (event: ReactMouseEvent) => {
     event.preventDefault();
@@ -341,14 +428,14 @@ function ThreadRow({
     onNavigate();
   };
 
-  return (
+  const row = (
     <div
       className={`group/row relative rounded-md ${
         isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
       }`}
       onContextMenu={(event) => {
         event.preventDefault();
-        openMenu.open(thread.id, event.clientX, event.clientY, null);
+        menu.openThread(thread.id, event.clientX, event.clientY, null);
       }}
     >
       <a
@@ -364,7 +451,8 @@ function ThreadRow({
           }
         }}
         title={`${title} — ${statusDotAria(thread)}`}
-        className={`flex min-w-0 items-center gap-2 rounded-md py-1 pl-2 pr-8 text-sm ${
+        style={{ paddingLeft: 8 + depth * 14 }}
+        className={`flex min-w-0 items-center gap-2 rounded-md py-1 pr-8 text-sm ${
           thread.isUnread && !isActive
             ? "font-medium text-foreground"
             : "text-muted-foreground"
@@ -394,12 +482,17 @@ function ThreadRow({
         type="button"
         aria-label={`Actions for ${title}`}
         aria-haspopup="menu"
-        aria-expanded={openMenu.activeThreadId === thread.id}
+        aria-expanded={menu.activeThreadId === thread.id}
         title="Thread actions"
         onClick={(event) => {
           event.stopPropagation();
           const rect = event.currentTarget.getBoundingClientRect();
-          openMenu.open(thread.id, rect.right, rect.bottom, event.currentTarget);
+          menu.openThread(
+            thread.id,
+            rect.right,
+            rect.bottom,
+            event.currentTarget,
+          );
         }}
         className={`absolute right-1 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded text-base leading-none text-subtle-foreground transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 ${
           isCompactViewport || isActive
@@ -411,22 +504,50 @@ function ThreadRow({
       </button>
     </div>
   );
+
+  if (children.length === 0) return row;
+
+  return (
+    <div>
+      {row}
+      <div className="space-y-px">
+        {children.map((child) => (
+          <ThreadRow
+            key={child.id}
+            thread={child}
+            depth={depth + 1}
+            childrenOf={childrenOf}
+            activeThreadId={activeThreadId}
+            isCompactViewport={isCompactViewport}
+            onNavigate={onNavigate}
+          />
+        ))}
+      </div>
+    </div>
+  );
 }
 
-/* Thread row menu -------------------------------------------------------- */
+/* Menus (thread + project) --------------------------------------------- */
 
-const RowMenuContext = createContext<{
+const MenuContext = createContext<{
   activeThreadId: string | null;
-  open: (
+  activeProjectId: string | null;
+  openThread: (
     threadId: string,
+    x: number,
+    y: number,
+    returnFocus: HTMLButtonElement | null,
+  ) => void;
+  openProject: (
+    projectId: string,
     x: number,
     y: number,
     returnFocus: HTMLButtonElement | null,
   ) => void;
 } | null>(null);
 
-function RowMenuProvider({ children }: { children: ReactNode }) {
-  const [menu, setMenu] = useState<RowMenuState | null>(null);
+function MenuProvider({ children }: { children: ReactNode }) {
+  const [menu, setMenu] = useState<MenuState | null>(null);
 
   useEffect(() => {
     if (!menu) return;
@@ -447,63 +568,85 @@ function RowMenuProvider({ children }: { children: ReactNode }) {
     };
   }, [menu]);
 
-  const open = (
+  const openThread = (
     threadId: string,
     x: number,
     y: number,
     returnFocus: HTMLButtonElement | null,
-  ) => setMenu({ threadId, x, y, returnFocus });
+  ) => setMenu({ kind: "thread", threadId, x, y, returnFocus });
+  const openProject = (
+    projectId: string,
+    x: number,
+    y: number,
+    returnFocus: HTMLButtonElement | null,
+  ) => setMenu({ kind: "project", projectId, x, y, returnFocus });
 
   return (
-    <RowMenuContext.Provider
-      value={{ activeThreadId: menu?.threadId ?? null, open }}
+    <MenuContext.Provider
+      value={{
+        activeThreadId: menu?.kind === "thread" ? menu.threadId : null,
+        activeProjectId: menu?.kind === "project" ? menu.projectId : null,
+        openThread,
+        openProject,
+      }}
     >
       {children}
-      {menu ? <RowMenu menu={menu} onClose={() => setMenu(null)} /> : null}
-    </RowMenuContext.Provider>
+      {menu?.kind === "thread" ? (
+        <RowMenu menu={menu} onClose={() => setMenu(null)} />
+      ) : null}
+      {menu?.kind === "project" ? (
+        <ProjectMenu menu={menu} onClose={() => setMenu(null)} />
+      ) : null}
+    </MenuContext.Provider>
   );
 }
 
-function useRowMenu() {
-  const ctx = useContext(RowMenuContext);
-  if (!ctx) throw new Error("useRowMenu outside RowMenuProvider");
+function useMenu() {
+  const ctx = useContext(MenuContext);
+  if (!ctx) throw new Error("useMenu outside MenuProvider");
   return ctx;
 }
 
-function RowMenu({
+function focusableItems(container: HTMLElement): HTMLButtonElement[] {
+  return Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+  );
+}
+
+function clampStyle(x: number, y: number, width: number, height: number) {
+  return {
+    left: Math.max(4, Math.min(x, window.innerWidth - width)),
+    top: Math.max(4, Math.min(y, window.innerHeight - height)),
+  };
+}
+
+const menuItemClass =
+  "w-full rounded px-2 py-1.5 text-left text-sm text-foreground hover:bg-accent focus:bg-accent focus:outline-none";
+
+function MenuShell({
+  label,
   menu,
   onClose,
+  children,
 }: {
-  menu: RowMenuState;
+  label: string;
+  menu: MenuState;
   onClose: () => void;
+  children: ReactNode;
 }) {
-  const actions = experimental_useSidebarThreadActions();
-  const { threads: allThreads } = experimental_useSidebarThreads();
-  const thread = allThreads.find((t) => t.id === menu.threadId);
-  const firstItemRef = useRef<HTMLButtonElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    firstItemRef.current?.focus();
-  }, [menu.threadId]);
+    if (containerRef.current) focusableItems(containerRef.current).at(0)?.focus();
+  }, [menu.kind, menu.kind === "thread" ? menu.threadId : menu.projectId]);
 
-  if (!thread) return null;
-
-  const itemClass =
-    "w-full rounded px-2 py-1.5 text-left text-sm text-foreground hover:bg-accent focus:bg-accent focus:outline-none";
-  const style = {
-    left: Math.max(4, Math.min(menu.x, window.innerWidth - 196)),
-    top: Math.max(4, Math.min(menu.y, window.innerHeight - 260)),
-  };
-
-  const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
-    const items = Array.from(
-      event.currentTarget.querySelectorAll<HTMLButtonElement>(
-        '[role="menuitem"]',
-      ),
+    const items = focusableItems(event.currentTarget);
+    const current = items.indexOf(
+      document.activeElement as HTMLButtonElement,
     );
-    const current = items.indexOf(document.activeElement as HTMLButtonElement);
     if (event.key === "Home") items[0]?.focus();
     else if (event.key === "End") items.at(-1)?.focus();
     else if (event.key === "ArrowDown")
@@ -513,18 +656,43 @@ function RowMenu({
 
   return (
     <div
+      ref={containerRef}
       role="menu"
-      aria-label={`Actions for ${threadTitle(thread)}`}
+      aria-label={label}
       className="fixed z-50 min-w-40 rounded-md border border-border bg-popover p-1 shadow-lg"
-      style={style}
+      style={clampStyle(menu.x, menu.y, 196, 260)}
       onClick={(event) => event.stopPropagation()}
-      onKeyDown={handleMenuKeyDown}
+      onKeyDown={handleKeyDown}
+    >
+      {children}
+    </div>
+  );
+}
+
+function RowMenu({
+  menu,
+  onClose,
+}: {
+  menu: Extract<MenuState, { kind: "thread" }>;
+  onClose: () => void;
+}) {
+  const actions = experimental_useSidebarThreadActions();
+  const { threads: allThreads } = experimental_useSidebarThreads();
+  const thread = allThreads.find((t) => t.id === menu.threadId);
+
+  if (!thread) return null;
+  const title = threadTitle(thread);
+
+  return (
+    <MenuShell
+      label={`Actions for ${title}`}
+      menu={menu}
+      onClose={onClose}
     >
       <button
-        ref={firstItemRef}
         type="button"
         role="menuitem"
-        className={itemClass}
+        className={menuItemClass}
         onClick={() => {
           void actions.setPinned(thread.id, !thread.isPinned);
           onClose();
@@ -535,7 +703,7 @@ function RowMenu({
       <button
         type="button"
         role="menuitem"
-        className={itemClass}
+        className={menuItemClass}
         onClick={() => {
           void actions.setRead(thread.id, thread.isUnread);
           onClose();
@@ -547,9 +715,9 @@ function RowMenu({
       <button
         type="button"
         role="menuitem"
-        className={itemClass}
+        className={menuItemClass}
         onClick={() => {
-          const nextTitle = window.prompt("Rename thread", threadTitle(thread));
+          const nextTitle = window.prompt("Rename thread", title);
           if (nextTitle?.trim()) void actions.rename(thread.id, nextTitle.trim());
           onClose();
         }}
@@ -559,7 +727,7 @@ function RowMenu({
       <button
         type="button"
         role="menuitem"
-        className={itemClass}
+        className={menuItemClass}
         onClick={() => {
           void navigator.clipboard?.writeText(thread.id).catch(() => undefined);
           onClose();
@@ -571,7 +739,7 @@ function RowMenu({
       <button
         type="button"
         role="menuitem"
-        className={itemClass}
+        className={menuItemClass}
         onClick={() => {
           actions.archive(thread.id);
           onClose();
@@ -582,7 +750,7 @@ function RowMenu({
       <button
         type="button"
         role="menuitem"
-        className={`${itemClass} text-destructive`}
+        className={`${menuItemClass} text-destructive`}
         onClick={() => {
           actions.requestDelete(thread.id);
           onClose();
@@ -590,7 +758,88 @@ function RowMenu({
       >
         Delete…
       </button>
-    </div>
+    </MenuShell>
+  );
+}
+
+function ProjectMenu({
+  menu,
+  onClose,
+}: {
+  menu: Extract<MenuState, { kind: "project" }>;
+  onClose: () => void;
+}) {
+  const actions = experimental_useSidebarThreadActions();
+  const rpc = useRpc<typeof rpcContract>();
+  const { projects: allProjects } = experimental_useSidebarThreads();
+  const project = allProjects.find((p) => p.id === menu.projectId);
+
+  if (!project) return null;
+  const projectName = project.name;
+
+  return (
+    <MenuShell
+      label={`Project actions for ${projectName}`}
+      menu={menu}
+      onClose={onClose}
+    >
+      <button
+        type="button"
+        role="menuitem"
+        className={menuItemClass}
+        onClick={() => {
+          actions.openNewThread({ projectId: project.id });
+          onClose();
+        }}
+      >
+        New thread
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className={menuItemClass}
+        onClick={() => {
+          const nextName = window.prompt("Rename project", projectName);
+          if (nextName?.trim()) {
+            void rpc
+              .call("renameProject", { projectId: project.id, name: nextName.trim() })
+              .catch(() => undefined);
+          }
+          onClose();
+        }}
+      >
+        Rename…
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className={menuItemClass}
+        onClick={() => {
+          void rpc
+            .call("archiveAllThreads", { projectId: project.id })
+            .catch(() => undefined);
+          onClose();
+        }}
+      >
+        Archive all threads
+      </button>
+      <div className="my-1 h-px bg-border" role="separator" />
+      <button
+        type="button"
+        role="menuitem"
+        className={`${menuItemClass} text-destructive`}
+        onClick={() => {
+          if (window.confirm(`Delete project "${projectName}"?`)) {
+            void rpc
+              .call("deleteProject", { projectId: project.id })
+              .catch(() => undefined);
+          }
+          onClose();
+        }}
+      >
+        Delete project…
+      </button>
+    </MenuShell>
   );
 }
 
